@@ -8,3 +8,4 @@
 > Commits you push to the connected branch sync back to Lovable and show up in
 > the editor, so keep the branch in a working state.
 <!-- LOVABLE:END -->
+- Purchase orders live only in the stock store (src/lib/stock); the Achats module (src/lib/purchase) references them and must receive goods through PurchaseProvider.receive so stock and receipt history stay in sync.

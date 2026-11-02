@@ -8,7 +8,9 @@ import {
   Scripts,
   type ErrorComponentProps,
 } from "@tanstack/react-router";
-import { useEffect, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
+import { Bell, Search } from "lucide-react";
+import { AppSidebar } from "@/components/app/AppSidebar";
 
 import appCss from "../styles.css?url";
 import { reportLovableError } from "../lib/lovable-error-reporting";
@@ -78,11 +80,8 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
     meta: [
       { charSet: "utf-8" },
       { name: "viewport", content: "width=device-width, initial-scale=1" },
-      { title: "Lovable App" },
-      { name: "description", content: "Lovable Generated Project" },
-      { name: "author", content: "Lovable" },
-      { property: "og:title", content: "Lovable App" },
-      { property: "og:description", content: "Lovable Generated Project" },
+      { title: "Pilotage CG — Contrôle de gestion" },
+      { name: "description", content: "Plateforme de contrôle de gestion pour les entreprises marocaines." },
       { property: "og:type", content: "website" },
       { name: "twitter:card", content: "summary_large_image" },
       { name: "twitter:site", content: "@Lovable" },
@@ -92,6 +91,9 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
         rel: "stylesheet",
         href: appCss,
       },
+      { rel: "preconnect", href: "https://fonts.googleapis.com" },
+      { rel: "preconnect", href: "https://fonts.gstatic.com", crossOrigin: "anonymous" },
+      { rel: "stylesheet", href: "https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=Manrope:wght@600;700;800&display=swap" },
       { rel: "icon", href: "/favicon.ico", type: "image/x-icon" },
     ],
   }),
@@ -103,7 +105,7 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
 
 function RootShell({ children }: { children: ReactNode }) {
   return (
-    <html lang="en">
+    <html lang="fr">
       <head>
         <HeadContent />
       </head>
@@ -121,7 +123,41 @@ function RootComponent() {
   return (
     <QueryClientProvider client={queryClient}>
       {/* Required: nested routes render here. Removing <Outlet /> breaks all child routes. */}
-      <Outlet />
+      <AppShell>
+        <Outlet />
+      </AppShell>
     </QueryClientProvider>
+  );
+}
+
+function AppShell({ children }: { children: ReactNode }) {
+  const [collapsed, setCollapsed] = useState(false);
+  return (
+    <div className="flex min-h-screen w-full bg-background">
+      <AppSidebar collapsed={collapsed} onToggle={() => setCollapsed((c) => !c)} />
+      <div className="flex min-w-0 flex-1 flex-col">
+        <header className="sticky top-0 z-10 flex h-16 items-center justify-between gap-4 border-b border-border bg-card/90 px-6 backdrop-blur">
+          <div className="flex w-full max-w-sm items-center gap-2 rounded-lg border border-input bg-muted px-3 py-2 text-sm text-muted-foreground">
+            <Search className="h-4 w-4" />
+            <input className="w-full bg-transparent outline-none placeholder:text-muted-foreground" placeholder="Rechercher un compte, un tiers, un rapport…" />
+          </div>
+          <div className="flex items-center gap-4">
+            <span className="hidden rounded-md bg-accent px-2.5 py-1 text-xs font-semibold text-accent-foreground md:inline">Exercice 2026</span>
+            <button aria-label="Notifications" className="relative text-muted-foreground hover:text-foreground">
+              <Bell className="h-5 w-5" />
+              <span className="absolute -right-0.5 -top-0.5 h-2 w-2 rounded-full bg-destructive" />
+            </button>
+            <div className="flex items-center gap-2">
+              <div className="grid h-9 w-9 place-items-center rounded-full bg-primary text-xs font-bold text-primary-foreground">SA</div>
+              <div className="hidden text-xs leading-tight lg:block">
+                <p className="font-semibold text-foreground">Société Atlas SA</p>
+                <p className="text-muted-foreground">Contrôleur de gestion</p>
+              </div>
+            </div>
+          </div>
+        </header>
+        <main className="flex-1 p-6 lg:p-8">{children}</main>
+      </div>
+    </div>
   );
 }
