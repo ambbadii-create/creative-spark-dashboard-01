@@ -39,10 +39,7 @@ const accounts: Account[] = [
   { id: "CA-2", kind: "Caisse", name: "Caisse dépôt", currency: "MAD", openingBalance: 6_500, openingDate: "2026-01-01", minBalance: 2_000, restricted: 0, status: "Actif", responsible: "H. Ouazzani", location: "Agadir", cashOpen: false },
 ];
 
-const loans: Loan[] = [
-  { id: "L-1", lender: "Attijariwafa bank", ref: "CMT-2025-0417", kind: "Crédit moyen terme", principal: 1_200_000, rate: 5.4, start: "2025-04-15", installments: 60, frequency: "Mensuelle", accountId: "BQ-1", status: "En cours", demo: true },
-  { id: "L-2", lender: "Maroc Leasing", ref: "CB-2024-1182", kind: "Crédit-bail", principal: 480_000, rate: 6.2, start: "2024-09-05", installments: 16, frequency: "Trimestrielle", accountId: "BQ-2", status: "En cours", demo: true },
-];
+const loans: Loan[] = [];
 
 const commitments: Commitment[] = [
   { id: "C-1", label: "Salaires nets", category: "Salaires", amount: 168_000, dayOfMonth: 28, active: true },
@@ -60,7 +57,8 @@ export function buildTreasuryDemo(): TreasuryState {
   let n = 0;
   const add = (date: string, label: string, direction: "in" | "out", category: Category, accountId: string, counterparty: string, amount: number, method: PaymentMethod, extra: Partial<Movement> = {}) => {
     n++;
-    const acc = accounts.find((a) => a.id === accountId)!;
+    const acc = accounts.find((a) => a.id === accountId);
+    if (!acc) return;
     movements.push({ id: `M-${pad(n)}${n}`, ref: `TR-2026-${String(n).padStart(4, "0")}`, date, valueDate: date, label, direction, category, accountId, counterparty, amount: round2(amount), currency: acc.currency, method, status: "Validé", source: "Trésorerie", comptaStatus: date < "2026-10-01" ? "Transmis" : "À transmettre", ...extra });
   };
 

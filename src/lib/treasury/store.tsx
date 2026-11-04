@@ -1,12 +1,14 @@
 import { createContext, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useSales } from "@/lib/sales/store";
 import { usePurchase } from "@/lib/purchase/store";
+import { useCompta } from "@/lib/compta/store";
+import { movementEntry, transferEntry } from "./integration";
 import { invoiceTotals, collected as salesCollected } from "@/lib/sales/model";
 import { invoiceTtc, paidAmount } from "@/lib/purchase/model";
 import { buildTreasuryDemo, type TreasuryState } from "./demo";
 import {
   approvalError, autoMatch, findDuplicate, isDuplicateStatement, validateAmount,
-  type Account, type Action, type Movement, type PayRequest, type Role, type StatementLine, type PaymentMethod,
+  isValidRib, availableBalance, type Account, type Action, type Movement, type PayRequest, type Role, type StatementLine, type PaymentMethod,
 } from "./model";
 
 const KEY = "pilotage-cg-tresorerie-v1";
@@ -45,12 +47,16 @@ const C = createContext<Ctx | null>(null);
 export function TreasuryProvider({ children }: { children: ReactNode }) {
   const sales = useSales();
   const purchase = usePurchase();
+  const compta = useCompta();
   const [s, setS] = useState<TreasuryState>(buildTreasuryDemo);
   const loaded = useRef(false);
   useEffect(() => {
     try {
       const raw = localStorage.getItem(KEY);
-      if (raw) setS(JSON.parse(raw));
+      if (raw) {
+        const saved = JSON.parse(raw) as TreasuryState;
+        setS({ ...saved, loans: saved.loans.filter((l) => !l.demo), movements: saved.movements.filter((m) => !(m.source === "Financements" && saved.loans.some((l) => l.demo && l.id === m.sourceId))) });
+      }
     } catch {}
     loaded.current = true;
   }, []);
@@ -95,6 +101,8 @@ export function TreasuryProvider({ children }: { children: ReactNode }) {
       const e = deny("comptes", "Votre rôle ne permet pas de gérer les comptes.");
       if (e) return e;
       if (!a.name.trim()) return "Le nom du compte est obligatoire.";
+      if (a.kind === "Banque" && a.number && !isValidRib(a.number)) return "Le RIB marocain doit comporter 24 chiffres.";
+      if (![a.openingBalance, a.minBalance, a.restricted].every(Number.isFinite) || a.minBalance < 0 || a.restricted < 0) return "Soldes et seuils invalides.";
       const prev = s.accounts.find((x) => x.id === a.id);
       setS((x) => log({ ...x, accounts: prev ? x.accounts.map((y) => (y.id === a.id ? a : y)) : [...x.accounts, a] }, prev ? "Modification compte" : "Création compte", a.name));
       return null;
@@ -129,6 +137,7 @@ export function TreasuryProvider({ children }: { children: ReactNode }) {
       if (e) return e;
       const m = s.movements.find((x) => x.id === id);
       if (!m || m.status !== "Brouillon") return "Mouvement non validable.";
+      if (locked(m.date)) return `Période verrouillée jusqu'au ${s.rules.lockedUntil}.`;
       setS((x) => log({ ...x, movements: x.movements.map((y) => (y.id === id ? { ...y, status: "Validé" } : y)) }, "Validation mouvement", m.ref));
       return null;
     },
@@ -148,9 +157,18 @@ export function TreasuryProvider({ children }: { children: ReactNode }) {
     transmit: () => {
       const e = deny("valider", "Votre rôle ne permet pas de transmettre à la comptabilité.");
       if (e) return e;
-      const own = s.movements.filter((m) => m.status === "Validé" && m.comptaStatus === "À transmettre").map((m) => m.id);
-      const linked = allMovements.filter((m) => m.source !== "Trésorerie" && m.source !== "Financements" && m.comptaStatus === "À transmettre");
-      if (!own.length && !linked.length) return "Aucun mouvement validé à transmettre.";
+      const pending = allMovements.filter((m) => m.status === "Validé" && m.comptaStatus === "À transmettre");
+      const entries = pending.filter((m) => !m.transferId).map((m) => movementEntry(m, s.accounts, s.fx)).filter((e) => e !== null);
+      for (const transferId of new Set(pending.flatMap((m) => m.transferId ? [m.transferId] : []))) {
+        const entry = transferEntry(allMovements.filter((m) => m.transferId === transferId), s.accounts, s.fx);
+        if (entry) entries.push(entry);
+      }
+      if (!entries.length) return "Aucun mouvement transmissible : vérifiez les catégories et cours de change.";
+      const err = compta.receiveTreasuryEntries(entries);
+      if (err) return err;
+      const sent = pending.filter((m) => entries.some((e) => e.id === `TREASURY-${m.id}` || (m.transferId && e.id === `TREASURY-${m.transferId}`)));
+      const own = sent.filter((m) => !m.id.startsWith("LNK-")).map((m) => m.id);
+      const linked = sent.filter((m) => m.id.startsWith("LNK-"));
       setS((x) => {
         const links = { ...x.links };
         for (const m of linked) {
@@ -166,6 +184,10 @@ export function TreasuryProvider({ children }: { children: ReactNode }) {
       if (e) return e;
       const inv = sales.invoices.find((i) => i.id === invoiceId);
       if (!inv) return "Facture introuvable.";
+      if (locked(date)) return `Période verrouillée jusqu'au ${s.rules.lockedUntil}.`;
+      const account = s.accounts.find((a) => a.id === accountId);
+      if (!account || account.status !== "Actif" || account.currency !== "MAD" || (account.kind === "Caisse" && !account.cashOpen)) return "Choisissez un compte MAD actif ou une caisse ouverte.";
+      if (!["Virement", "Chèque", "Effet (LCN)", "Espèces"].includes(method)) return "Mode de règlement non pris en charge par Ventes.";
       const rest = invoiceTotals(inv).ttc - salesCollected(invoiceId, sales.collections);
       const v = validateAmount(amount, rest);
       if (v) return v;
@@ -182,6 +204,10 @@ export function TreasuryProvider({ children }: { children: ReactNode }) {
       if (e) return e;
       if (!r.beneficiary.trim()) return "Le bénéficiaire est obligatoire.";
       if (!(r.amount > 0)) return "Le montant doit être strictement positif.";
+      const account = s.accounts.find((a) => a.id === r.accountId);
+      if (!account || account.status !== "Actif" || (r.invoiceId && account.currency !== "MAD")) return "Compte de paiement invalide (factures fournisseurs en MAD).";
+      const previous = s.requests.find((x) => x.id === r.id);
+      if (previous && previous.status !== "En attente de validation") return "Demande déjà traitée : modification refusée.";
       if (r.invoiceId) {
         const inv = purchase.invoices.find((i) => i.id === r.invoiceId);
         if (!inv) return "Facture introuvable.";
@@ -205,6 +231,7 @@ export function TreasuryProvider({ children }: { children: ReactNode }) {
     rejectRequest: (id, reason) => {
       const r = s.requests.find((x) => x.id === id);
       if (!r) return "Demande introuvable.";
+      if (r.status !== "En attente de validation" && r.status !== "Programmé") return "Demande déjà traitée.";
       if (!can("approuver") && r.requestedBy !== s.role) return "Votre rôle ne permet pas de rejeter cette demande.";
       if (!reason.trim()) return "Le motif est obligatoire.";
       const status = r.requestedBy === s.role ? "Annulé" : "Rejeté";
@@ -222,8 +249,14 @@ export function TreasuryProvider({ children }: { children: ReactNode }) {
       if (locked(date)) return `Période verrouillée jusqu'au ${s.rules.lockedUntil}.`;
       const acc = s.accounts.find((a) => a.id === r.accountId);
       if (!acc || acc.status !== "Actif") return "Le compte de paiement n'est pas actif.";
+      if (acc.kind === "Caisse" && !acc.cashOpen) return "La caisse est fermée.";
+      if (amount > availableBalance(acc, allMovements, date)) return "Solde disponible insuffisant.";
       const ref = paymentRef.trim() || nid("PAY");
       if (r.invoiceId) {
+        const inv = purchase.invoices.find((i) => i.id === r.invoiceId);
+        if (!inv) return "Facture introuvable.";
+        const remainingError = validateAmount(amount, invoiceTtc(inv) - paidAmount(inv.id, purchase.payments));
+        if (remainingError) return remainingError;
         const pid = nid("PAY");
         purchase.addPayment({ id: pid, invoiceId: r.invoiceId, date, amount, method: (["Virement", "Chèque", "Effet (LCN)", "Espèces"].includes(r.method) ? r.method : "Virement") as never, reference: ref });
         setS((x) => log({ ...x, links: { ...x.links, [pid]: { accountId: r.accountId, transmitted: false } }, requests: x.requests.map((y) => (y.id === id ? { ...y, status: amount < r.amount ? "Programmé" : "Payé", amount: amount < r.amount ? y.amount - amount : y.amount, paidDate: date, paymentRef: ref } : y)) }, "Exécution paiement", `${r.ref} — ${amount.toLocaleString("fr-FR")} DH`));
@@ -234,6 +267,7 @@ export function TreasuryProvider({ children }: { children: ReactNode }) {
       return null;
     },
     importStatement: (lines) => {
+      if (!can("rapprocher")) return { added: 0, duplicates: 0 };
       let duplicates = 0;
       const fresh: StatementLine[] = [];
       for (const l of lines) {
@@ -254,6 +288,10 @@ export function TreasuryProvider({ children }: { children: ReactNode }) {
       const e = deny("rapprocher", "Votre rôle ne permet pas de rapprocher.");
       if (e) return e;
       if (!statementIds.length || !movementIds.length) return "Sélectionnez au moins une ligne de relevé et un mouvement.";
+      const statements = s.statements.filter((l) => statementIds.includes(l.id));
+      const movements = allMovements.filter((m) => movementIds.includes(m.id));
+      if (statements.length !== statementIds.length || movements.length !== movementIds.length || movements.some((m) => m.status !== "Validé")) return "Lignes introuvables ou mouvements non validés.";
+      if (new Set([...statements, ...movements].map((l) => l.accountId)).size !== 1) return "Le rapprochement doit concerner un seul compte bancaire.";
       if (s.matches.some((m) => m.statementIds.some((x) => statementIds.includes(x)) || m.movementIds.some((x) => movementIds.includes(x)))) return "Une des lignes est déjà rapprochée.";
       setS((x) => log({ ...x, matches: [...x.matches, { id: nid("RAP"), statementIds, movementIds, at: new Date().toISOString(), role: x.role, kind: "Manuel" }], statements: x.statements.map((l) => (statementIds.includes(l.id) ? { ...l, flagged: false } : l)) }, "Rapprochement manuel", `${statementIds.length} relevé ↔ ${movementIds.length} mouvement(s)`));
       return null;

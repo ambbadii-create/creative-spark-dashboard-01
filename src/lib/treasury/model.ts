@@ -301,7 +301,7 @@ export function loanSchedule(l: Loan): ScheduleRow[] {
 }
 export function loanOutstanding(l: Loan, today: string) {
   const past = loanSchedule(l).filter((r) => r.date <= today);
-  return past.length ? past[past.length - 1]!.remaining : l.principal;
+  return past.at(-1)?.remaining ?? l.principal;
 }
 
 /* ------------------------------------------------------------------ Rapprochement */
