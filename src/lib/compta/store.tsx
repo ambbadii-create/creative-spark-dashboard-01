@@ -19,6 +19,7 @@ const initial = (): State => {
 
 type Result = string | null; // message d'erreur ou null
 type Ctx = State & {
+  receiveTreasuryEntries: (entries: Entry[]) => string | null;
   isClosed: (date: string) => boolean;
   saveEntry: (e: Entry) => Result;
   validate: (id: string) => Result;
@@ -57,6 +58,17 @@ export function ComptaProvider({ children }: { children: ReactNode }) {
 
   const ctx: Ctx = {
     ...s,
+    receiveTreasuryEntries: (incoming) => {
+      if (incoming.some((e) => isClosed(e.date))) return "Une période comptable est clôturée : transmission refusée.";
+      const errors = incoming.flatMap((e) => validateEntry(e));
+      if (errors.length) return errors.join(" ");
+      setS((st) => {
+        const existing = new Set(st.entries.map((e) => e.id));
+        const fresh = incoming.filter((e) => !existing.has(e.id));
+        return log({ ...st, entries: [...st.entries, ...fresh.map((e) => ({ ...e, status: "Brouillon" as const }))] }, "Réception trésorerie", `${fresh.length} écriture(s) à vérifier`);
+      });
+      return null;
+    },
     isClosed,
     saveEntry: (e) => {
       const prev = s.entries.find((x) => x.id === e.id);
